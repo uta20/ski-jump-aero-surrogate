@@ -1,7 +1,7 @@
 [project]
 name = "ski-jump-aero-surrogate"
 version = "0.1.0"
-description = "スキージャンプの軌道を空力モデルでシミュレーションし、飛距離のサロゲートモデルと感度分析を行う"
+description = "スキージャンプの軌道を空力モデルでシミュレーションし, 飛距離のサロゲートモデルと感度分析を行う"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

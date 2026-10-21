@@ -1,19 +1,19 @@
-"""1回のジャンプ飛行をシミュレーションし、結果を表示するデモ。
+"""1回のジャンプ飛行をシミュレーションし, 結果を表示するデモ.
 
-**ここで使っている質量・面積・係数・踏切条件はすべて動作確認用の
-プレースホルダであり、実在の選手・用具・CFD結果の値ではない。**
-得られる飛距離も現実の競技の飛距離を再現するものではない。
+**ここで使っている質量・有効面積・踏切条件はすべて動作確認用の
+プレースホルダであり, 実在の選手・用具・CFD結果の値ではない.**
+得られる飛距離も現実の競技の飛距離を再現するものではない.
 
 使い方:
     uv run scripts/demo_flight.py
-    uv run scripts/demo_flight.py --wind -2.0 --cl 0.5 --cd 0.5
+    uv run scripts/demo_flight.py --wind -2.0 --lift-area 0.4 --drag-area 0.4
 """
 
 from __future__ import annotations
 
 import argparse
 
-from src.coefficients import ConstantCoefficients
+from src.effective_areas import ConstantEffectiveAreas
 from src.hill import Hill
 from src.physics import Environment, JumperParams, TakeoffState, simulate
 
@@ -28,10 +28,16 @@ def parse_args() -> argparse.Namespace:
         "--wind", type=float, default=0.0, help="水平風 [m/s](追い風が正)"
     )
     parser.add_argument(
-        "--cl", type=float, default=0.5, help="揚力係数(プレースホルダ)"
+        "--lift-area",
+        type=float,
+        default=0.40,
+        help="有効揚力面積 A_L [m^2](プレースホルダ)",
     )
     parser.add_argument(
-        "--cd", type=float, default=0.5, help="抗力係数(プレースホルダ)"
+        "--drag-area",
+        type=float,
+        default=0.40,
+        help="有効抗力面積 A_D [m^2](プレースホルダ)",
     )
     parser.add_argument("--slope", type=float, default=35.0, help="斜面の勾配 [deg]")
     return parser.parse_args()
@@ -42,9 +48,11 @@ def main() -> None:
 
     result = simulate(
         takeoff=TakeoffState(speed=args.speed, angle_deg=args.angle),
-        params=JumperParams(mass=65.0, area=0.8),  # プレースホルダ
+        params=JumperParams(mass=65.0),  # プレースホルダ
         env=Environment(wind_x=args.wind),
-        coeffs=ConstantCoefficients(cl=args.cl, cd=args.cd),
+        areas=ConstantEffectiveAreas(
+            lift_area=args.lift_area, drag_area=args.drag_area
+        ),
         hill=Hill.constant_slope(args.slope),
     )
 

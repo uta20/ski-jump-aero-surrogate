@@ -1,27 +1,30 @@
-"""ジャンプ飛行の2次元質点モデル(揚力・抗力つき)。
+"""ジャンプ飛行の2次元質点モデル(揚力・抗力つき).
 
 ## 運動方程式
 
-選手+用具を質量 m の質点とみなし、空気に対する相対速度を
-``v_rel = v - w`` (w は風速ベクトル)とすると、
+選手+用具を質量 m の質点とみなし, 空気に対する相対速度を
+``v_rel = v - w`` (w は風速ベクトル)とすると,
 
     m dv/dt = m g
-              - (1/2) rho S Cd |v_rel| v_rel                (抗力)
-              + (1/2) rho S Cl |v_rel| (-v_rel_y, v_rel_x)  (揚力)
+              - (1/2) rho A_D |v_rel| v_rel                 (抗力)
+              + (1/2) rho A_L |v_rel| (-v_rel_y, v_rel_x)   (揚力)
 
-抗力は相対速度と逆向き、揚力は相対速度を反時計回りに90度回した向き
-(前方に飛んでいるとき上向き)に働く。
+A_D = Cd S は有効抗力面積, A_L = Cl S は有効揚力面積 [m^2] である
+(``effective_areas.py``). 基準面積 S は別に持たない.
+
+抗力は相対速度と逆向き, 揚力は相対速度を反時計回りに90度回した向き
+(前方に飛んでいるとき上向き)に働く.
 
 ## 座標系と符号
 
-- 原点は踏切点、x は前方(ジャンプ方向)が正、y は鉛直上向きが正
-- 風は水平成分のみ ``wind_x``。+x 方向に吹く風(追い風)が正、
+- 原点は踏切点, x は前方(ジャンプ方向)が正, y は鉛直上向きが正
+- 風は水平成分のみ ``wind_x``. +x 方向に吹く風(追い風)が正,
   向かい風は負
 
 ## このモデルの限界
 
-姿勢の変化・選手の回転運動・スキー板と身体の相互作用は扱わない。
-空力的な振る舞いはすべて係数 Cl, Cd (``coefficients.py``)に押し込めている。
+姿勢の変化・選手の回転運動・スキー板と身体の相互作用は扱わない.
+空力的な振る舞いはすべて有効面積 A_L, A_D (``effective_areas.py``)に押し込めている.
 """
 
 from __future__ import annotations
@@ -32,7 +35,7 @@ from dataclasses import dataclass
 import numpy as np
 from scipy.integrate import solve_ivp
 
-from .coefficients import CoefficientModel
+from .effective_areas import EffectiveAreaModel
 from .hill import Hill
 
 G = 9.80665  # 標準重力加速度 [m/s^2]
@@ -40,32 +43,31 @@ G = 9.80665  # 標準重力加速度 [m/s^2]
 
 @dataclass(frozen=True)
 class JumperParams:
-    """選手+用具の物理パラメータ。"""
+    """選手+用具の物理パラメータ. """
 
     mass: float  # 質量 [kg]
-    area: float  # 基準面積 S [m^2]。Cl, Cd の定義と一致させること
 
 
 @dataclass(frozen=True)
 class Environment:
-    """環境条件。"""
+    """環境条件. """
 
     rho: float = 1.225  # 空気密度 [kg/m^3]
-    wind_x: float = 0.0  # 水平風 [m/s]。+x向き(追い風)が正、向かい風は負
+    wind_x: float = 0.0  # 水平風 [m/s]. +x向き(追い風)が正, 向かい風は負
     g: float = G
 
 
 @dataclass(frozen=True)
 class TakeoffState:
-    """踏切直後の状態。"""
+    """踏切直後の状態. """
 
     speed: float  # 地面に対する速さ [m/s]
-    angle_deg: float  # 水平面からの角度 [deg]。上向きが正、下向きが負
+    angle_deg: float  # 水平面からの角度 [deg]. 上向きが正, 下向きが負
 
 
 @dataclass
 class FlightResult:
-    """1回の飛行シミュレーションの結果。"""
+    """1回の飛行シミュレーションの結果. """
 
     t: np.ndarray
     x: np.ndarray
@@ -84,19 +86,19 @@ def acceleration(
     vel: np.ndarray,
     params: JumperParams,
     env: Environment,
-    coeffs: CoefficientModel,
+    areas: EffectiveAreaModel,
 ) -> np.ndarray:
-    """速度 vel=(vx, vy) のときの加速度 (ax, ay) を返す。"""
+    """速度 vel=(vx, vy) のときの加速度 (ax, ay) を返す. """
     gravity = np.array([0.0, -env.g])
     v_rel = np.asarray(vel, dtype=float) - np.array([env.wind_x, 0.0])
     speed = float(math.hypot(v_rel[0], v_rel[1]))
     if speed < 1e-12:
         return gravity  # 相対速度がゼロなら空気力は働かない
 
-    cl, cd = coeffs(t, v_rel)
-    q = 0.5 * env.rho * params.area * speed  # (1/2) rho S |v_rel|
-    drag = -q * cd * v_rel
-    lift = q * cl * np.array([-v_rel[1], v_rel[0]])
+    lift_area, drag_area = areas(t, v_rel)
+    q = 0.5 * env.rho * speed  # (1/2) rho |v_rel|
+    drag = -q * drag_area * v_rel
+    lift = q * lift_area * np.array([-v_rel[1], v_rel[0]])
     return gravity + (drag + lift) / params.mass
 
 
@@ -104,23 +106,23 @@ def simulate(
     takeoff: TakeoffState,
     params: JumperParams,
     env: Environment,
-    coeffs: CoefficientModel,
+    areas: EffectiveAreaModel,
     hill: Hill,
     t_max: float = 15.0,
     rtol: float = 1e-9,
     atol: float = 1e-9,
 ) -> FlightResult:
-    """踏切から着地までの軌道を数値積分する。
+    """踏切から着地までの軌道を数値積分する.
 
     着地は「選手の位置が斜面の高さを上から下へ横切る瞬間」として
-    ``solve_ivp`` のイベント検出で求める。
+    ``solve_ivp`` のイベント検出で求める.
     """
     angle = math.radians(takeoff.angle_deg)
     vx0 = takeoff.speed * math.cos(angle)
     vy0 = takeoff.speed * math.sin(angle)
 
     def rhs(t: float, s: np.ndarray) -> list[float]:
-        a = acceleration(t, s[2:4], params, env, coeffs)
+        a = acceleration(t, s[2:4], params, env, areas)
         return [s[2], s[3], a[0], a[1]]
 
     def ground(t: float, s: np.ndarray) -> float:

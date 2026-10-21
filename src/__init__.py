@@ -1,6 +1,6 @@
-"""ski-jump-aero-surrogate: ジャンプ軌道の空力シミュレーションとサロゲートモデル。"""
+"""ski-jump-aero-surrogate: ジャンプ軌道の空力シミュレーションとサロゲートモデル. """
 
-from .coefficients import ConstantCoefficients, TimeTableCoefficients
+from .effective_areas import ConstantEffectiveAreas, TimeTableEffectiveAreas
 from .hill import Hill
 from .physics import (
     Environment,
@@ -12,13 +12,13 @@ from .physics import (
 )
 
 __all__ = [
-    "ConstantCoefficients",
+    "ConstantEffectiveAreas",
     "Environment",
     "FlightResult",
     "Hill",
     "JumperParams",
     "TakeoffState",
-    "TimeTableCoefficients",
+    "TimeTableEffectiveAreas",
     "acceleration",
     "simulate",
 ]

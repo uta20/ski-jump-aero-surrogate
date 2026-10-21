@@ -3,7 +3,7 @@ import math
 import numpy as np
 import pytest
 
-from src.coefficients import ConstantCoefficients, TimeTableCoefficients
+from src.effective_areas import ConstantEffectiveAreas, TimeTableEffectiveAreas
 from src.hill import Hill
 
 
@@ -43,31 +43,31 @@ def test_hill_rejects_invalid_points():
         Hill.from_points(np.array([0.0, 0.0]), np.array([0.0, 1.0]))
 
 
-def test_constant_coefficients_ignore_time_and_velocity():
-    coeffs = ConstantCoefficients(cl=0.6, cd=0.5)
-    assert coeffs(0.0, np.array([20.0, 0.0])) == (0.6, 0.5)
-    assert coeffs(3.0, np.array([5.0, -3.0])) == (0.6, 0.5)
+def test_constant_areas_ignore_time_and_velocity():
+    areas = ConstantEffectiveAreas(lift_area=0.48, drag_area=0.40)
+    assert areas(0.0, np.array([20.0, 0.0])) == (0.48, 0.40)
+    assert areas(3.0, np.array([5.0, -3.0])) == (0.48, 0.40)
 
 
 def test_time_table_interpolates_and_clamps():
-    coeffs = TimeTableCoefficients(
+    areas = TimeTableEffectiveAreas(
         times=np.array([0.0, 1.0]),
-        cl=np.array([0.0, 1.0]),
-        cd=np.array([1.0, 0.0]),
+        lift_area=np.array([0.0, 1.0]),
+        drag_area=np.array([1.0, 0.0]),
     )
     v = np.array([20.0, 0.0])
-    assert coeffs(0.5, v) == pytest.approx((0.5, 0.5))
+    assert areas(0.5, v) == pytest.approx((0.5, 0.5))
     # 表の範囲外は端の値を保持する(外挿しない)
-    assert coeffs(-1.0, v) == pytest.approx((0.0, 1.0))
-    assert coeffs(5.0, v) == pytest.approx((1.0, 0.0))
+    assert areas(-1.0, v) == pytest.approx((0.0, 1.0))
+    assert areas(5.0, v) == pytest.approx((1.0, 0.0))
 
 
 def test_time_table_rejects_invalid_input():
     with pytest.raises(ValueError):
-        TimeTableCoefficients(
+        TimeTableEffectiveAreas(
             np.array([0.0, 0.0]), np.array([0.0, 1.0]), np.array([0.0, 1.0])
         )
     with pytest.raises(ValueError):
-        TimeTableCoefficients(
+        TimeTableEffectiveAreas(
             np.array([0.0, 1.0]), np.array([0.0]), np.array([0.0, 1.0])
         )
