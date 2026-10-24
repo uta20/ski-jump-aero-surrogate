@@ -76,3 +76,48 @@ class TimeTableEffectiveAreas:
         lift_area = float(np.interp(t, self._times, self._lift_area))
         drag_area = float(np.interp(t, self._times, self._drag_area))
         return lift_area, drag_area
+
+
+class BlendedEffectiveAreas:
+    """2つのモデルを, 区間 [blend_start, blend_end] でなめらかにつなぐ.
+
+    t <= blend_start では ``early``, t >= blend_end では ``late`` をそのまま使い,
+    間は smoothstep の重み w = 3x^2 - 2x^3 (x は区間内の位置 0..1)で
+    線形結合する. smoothstep は両端で傾きが0なので, 境目で値も傾きも連続になる.
+
+    非定常CFDがカバーする区間(``early``)と, 文献値で置き換える後半(``late``)を
+    つなぐために使う. 境目に段差があると, 軌道が人工的に乱れる.
+    """
+
+    def __init__(
+        self,
+        early: EffectiveAreaModel,
+        late: EffectiveAreaModel,
+        blend_start: float,
+        blend_end: float,
+    ) -> None:
+        if not (0.0 <= blend_start < blend_end):
+            raise ValueError("0 <= blend_start < blend_end である必要があります")
+        self._early = early
+        self._late = late
+        self._start = blend_start
+        self._end = blend_end
+
+    def weight(self, t: float) -> float:
+        """late 側の重み(0..1)."""
+        x = (t - self._start) / (self._end - self._start)
+        x = min(1.0, max(0.0, x))
+        return x * x * (3.0 - 2.0 * x)
+
+    def __call__(self, t: float, v_rel: np.ndarray) -> tuple[float, float]:
+        w = self.weight(t)
+        if w <= 0.0:
+            return self._early(t, v_rel)
+        if w >= 1.0:
+            return self._late(t, v_rel)
+        e_lift, e_drag = self._early(t, v_rel)
+        l_lift, l_drag = self._late(t, v_rel)
+        return (
+            (1.0 - w) * e_lift + w * l_lift,
+            (1.0 - w) * e_drag + w * l_drag,
+        )

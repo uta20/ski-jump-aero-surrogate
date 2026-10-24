@@ -5,6 +5,7 @@ description = "スキージャンプの軌道を空力モデルでシミュレ�
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "matplotlib>=3.11.2",
     "numpy>=2.5.4",
     "pandas>=3.0.6",
     "scipy>=1.18.1",
