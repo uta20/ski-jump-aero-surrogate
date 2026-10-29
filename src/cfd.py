@@ -1,27 +1,22 @@
-"""非定常CFDの力の時系列(CSV)を, 軌道計算用の有効面積の表に変換する.
+"""非定常CFDの抗力・揚力の時系列(CSV)を, 軌道計算用の有効面積の表に変換する.
+
+コードに与えられるデータは, 空気密度 rho [kg/m^3], 自由流の速さ U [m/s], および
+時刻・抗力 D [N]・揚力 L [N] の時系列であると仮定する.
 
 処理の流れ:
 
-1. ``load_force_csv``: 時刻と (Fx, Fy, Fz) [N] を読み込む
-2. ``forces_to_areas``: 自由流の速さ U と空気密度 rho から ``A = F / (1/2 rho U^2)`` で
-   有効抗力面積 A_D, 有効揚力面積 A_L, 横力の有効面積 A_S [m^2] に変換する
+1. ``load_drag_lift_csv``: 時刻と抗力・揚力 [N] を読み込む
+2. ``to_effective_areas``: ``A = F / (1/2 rho U^2)`` で有効抗力面積 A_D と
+   有効揚力面積 A_L [m^2] に変換する
 3. ``hold_initial``: 計算開始直後の過渡的な立ち上がりを, その直後の平均値で置き換える
 4. ``smooth_and_resample``: 移動平均で平滑化し, 粗い時間刻みに間引く
 5. ``to_time_table``: ``TimeTableEffectiveAreas`` に変換して物理コアに渡す
 
-## 軸の向きと符号について
+## 符号の規約
 
-軸の向きや力の符号を取り違えると, 揚力と抗力が静かに入れ替わったり符号が反転したり
-する. そのため ``FlowConvention`` の全項目は**必須の明示指定**にしてあり, 既定値は無い.
-
-- ``flow_direction``: 空気が物体に対して流れていく向き(下流方向)の単位ベクトル.
-  選手が +x 方向に進む場合, 空気は物体に対して -x 向きに流れるので (-1, 0, 0) となる
-- ``up_direction``: 鉛直上向きに対応するベクトル
-- ``force_on_body``: CSVの力が「流体から物体が受ける力」なら True, 逆(物体が流体に
-  及ぼす力)なら False
-
-抗力は自由流方向の成分, 揚力は鉛直上向きのうち自由流に垂直な成分として定義する.
-横力(Fz に相当する成分)は2次元モデルでは使わないが, 大きさの確認用に A_S を出力する.
+抗力は自由流方向を正, 揚力は鉛直上向き側を正とした値を与えること. 抗力の平均が
+負なら符号の規約が逆である可能性が高いため, 読み込み時にエラーにする. 揚力は
+符号が変わりうる(開始直後に負になる等)ため, 同様のチェックはしない.
 """
 
 from __future__ import annotations
@@ -36,11 +31,12 @@ from .effective_areas import TimeTableEffectiveAreas
 
 
 @dataclass(frozen=True)
-class ForceSeries:
-    """力の時系列. ``force`` は shape (n, 3) で単位は N."""
+class DragLiftSeries:
+    """抗力・揚力の時系列 [N]."""
 
     t: np.ndarray
-    force: np.ndarray
+    drag: np.ndarray
+    lift: np.ndarray
 
 
 @dataclass(frozen=True)
@@ -50,61 +46,25 @@ class EffectiveAreaSeries:
     t: np.ndarray
     lift_area: np.ndarray
     drag_area: np.ndarray
-    side_area: np.ndarray
 
 
-@dataclass(frozen=True, kw_only=True)
-class FlowConvention:
-    """CFDの座標系・符号・流れの条件. 既定値は意図的に持たせていない."""
-
-    flow_direction: tuple[float, float, float]
-    up_direction: tuple[float, float, float]
-    force_on_body: bool
-    rho: float  # CFDで使った空気密度 [kg/m^3]
-    speed: float  # 自由流の速さ [m/s]
-
-    def __post_init__(self) -> None:
-        if self.rho <= 0 or self.speed <= 0:
-            raise ValueError("rho と speed は正の値である必要があります")
-        flow = np.asarray(self.flow_direction, dtype=float)
-        up = np.asarray(self.up_direction, dtype=float)
-        if np.linalg.norm(flow) == 0 or np.linalg.norm(up) == 0:
-            raise ValueError("flow_direction と up_direction は零ベクトルにできません")
-        d = flow / np.linalg.norm(flow)
-        if np.linalg.norm(np.cross(d, up)) < 1e-9:
-            raise ValueError(
-                "up_direction が自由流と平行で, 揚力の向きを決められません"
-            )
-
-    def basis(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """(抗力方向 d, 揚力方向 l, 横力方向 s) の正規直交基底を返す."""
-        d = np.asarray(self.flow_direction, dtype=float)
-        d = d / np.linalg.norm(d)
-        up = np.asarray(self.up_direction, dtype=float)
-        lift = up - np.dot(up, d) * d  # 鉛直上向きのうち自由流に垂直な成分
-        lift = lift / np.linalg.norm(lift)
-        side = np.cross(lift, d)
-        return d, lift, side
-
-
-def load_force_csv(
+def load_drag_lift_csv(
     path: str | Path,
     *,
     has_header: bool,
     t_col: int = 0,
-    fx_col: int = 1,
-    fy_col: int = 2,
-    fz_col: int = 3,
+    drag_col: int = 1,
+    lift_col: int = 2,
     expected_dt: float | None = 1.0e-4,
     zero_time: bool = True,
-) -> ForceSeries:
-    """時刻と力 (Fx, Fy, Fz) [N] を含むCSVを読み込む.
+) -> DragLiftSeries:
+    """時刻・抗力 [N]・揚力 [N] を含むCSVを読み込む.
 
-    ``has_header`` は必須の明示指定. 列の取り違え(例: 時刻列と力の列の入れ替わり)を
+    ``has_header`` は必須の明示指定. 列の取り違え(時刻列と力の列の入れ替わり)を
     検知するため, ``expected_dt`` を与えると時間刻みの中央値が一致するかを確認する.
     ``zero_time=True`` なら, 最初のサンプルの時刻が0になるように時刻を平行移動する.
     """
-    usecols = [t_col, fx_col, fy_col, fz_col]
+    usecols = [t_col, drag_col, lift_col]
     try:
         df = pd.read_csv(
             path, header=0 if has_header else None, usecols=usecols, dtype=float
@@ -116,11 +76,10 @@ def load_force_csv(
         ) from e
 
     # pandas は usecols の指定順ではなく, ファイル内の列順で返す. 指定した順
-    # (時刻, Fx, Fy, Fz)に並べ替える. ヘッダーの有無に関わらず列の位置で引く.
+    # (時刻, 抗力, 揚力)に並べ替える. ヘッダーの有無に関わらず列の位置で引く.
     file_order = sorted(usecols)
     data = df.to_numpy()[:, [file_order.index(c) for c in usecols]]
-    t = data[:, 0]
-    force = data[:, 1:4]
+    t, drag, lift = data[:, 0], data[:, 1], data[:, 2]
 
     if len(t) < 2:
         raise ValueError("データが2行未満です")
@@ -134,22 +93,25 @@ def load_force_csv(
                 f"時間刻みの中央値 {median_dt:.3e} s が想定 {expected_dt:.3e} s と"
                 f"一致しません. 時刻列の指定を確認してください"
             )
+    if drag.mean() <= 0:
+        raise ValueError(
+            "抗力の平均が正ではありません. 抗力は自由流方向を正とした値を与えるか, "
+            "列の指定を確認してください"
+        )
     if zero_time:
         t = t - t[0]
-    return ForceSeries(t=t, force=force)
+    return DragLiftSeries(t=t, drag=drag, lift=lift)
 
 
-def forces_to_areas(series: ForceSeries, conv: FlowConvention) -> EffectiveAreaSeries:
-    """力 [N] を有効面積 [m^2] に変換する: A = F / (1/2 rho U^2)."""
-    d, lift, side = conv.basis()
-    sign = 1.0 if conv.force_on_body else -1.0
-    q = 0.5 * conv.rho * conv.speed**2
-    f = sign * series.force
+def to_effective_areas(
+    series: DragLiftSeries, *, rho: float, speed: float
+) -> EffectiveAreaSeries:
+    """抗力・揚力 [N] を有効面積 [m^2] に変換する: A = F / (1/2 rho U^2)."""
+    if rho <= 0 or speed <= 0:
+        raise ValueError("rho と speed は正の値である必要があります")
+    q = 0.5 * rho * speed**2
     return EffectiveAreaSeries(
-        t=series.t,
-        lift_area=(f @ lift) / q,
-        drag_area=(f @ d) / q,
-        side_area=(f @ side) / q,
+        t=series.t, lift_area=series.lift / q, drag_area=series.drag / q
     )
 
 
@@ -176,10 +138,7 @@ def hold_initial(
         return out
 
     return replace(
-        areas,
-        lift_area=hold(areas.lift_area),
-        drag_area=hold(areas.drag_area),
-        side_area=hold(areas.side_area),
+        areas, lift_area=hold(areas.lift_area), drag_area=hold(areas.drag_area)
     )
 
 
@@ -214,10 +173,36 @@ def smooth_and_resample(
         t=new_t,
         lift_area=process(areas.lift_area),
         drag_area=process(areas.drag_area),
-        side_area=process(areas.side_area),
     )
 
 
 def to_time_table(areas: EffectiveAreaSeries) -> TimeTableEffectiveAreas:
-    """揚力・抗力の有効面積の時系列を, 物理コア用の表に変換する(横力は使わない)."""
+    """有効面積の時系列を, 物理コア用の表に変換する."""
     return TimeTableEffectiveAreas(areas.t, areas.lift_area, areas.drag_area)
+
+
+def cfd_scenario(
+    path: str | Path,
+    *,
+    has_header: bool,
+    rho: float,
+    speed: float,
+    skip: float,
+    window: float,
+    step: float,
+    t_col: int = 0,
+    drag_col: int = 1,
+    lift_col: int = 2,
+    expected_dt: float | None = 1.0e-4,
+) -> TimeTableEffectiveAreas:
+    """CSVから有効面積の表までの一連の処理をまとめた関数.
+
+    実データが届いたとき, 仮のシナリオの代わりに使う入口になる.
+    """
+    series = load_drag_lift_csv(
+        path, has_header=has_header, t_col=t_col, drag_col=drag_col,
+        lift_col=lift_col, expected_dt=expected_dt,
+    )
+    areas = to_effective_areas(series, rho=rho, speed=speed)
+    areas = hold_initial(areas, skip)
+    return to_time_table(smooth_and_resample(areas, window=window, step=step))

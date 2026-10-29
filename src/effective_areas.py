@@ -121,3 +121,27 @@ class BlendedEffectiveAreas:
             (1.0 - w) * e_lift + w * l_lift,
             (1.0 - w) * e_drag + w * l_drag,
         )
+
+
+class ScaledEffectiveAreas:
+    """別のモデルの有効揚力面積・有効抗力面積を, それぞれ定数倍するラッパー.
+
+    CFDの不確かさ, 文献値のばらつき, 選手ごとの空力特性の差などを, 乗数として
+    表現するために使う(例: ``lift_scale=1.05`` は有効揚力面積を5%大きくする).
+    """
+
+    def __init__(
+        self,
+        base: EffectiveAreaModel,
+        lift_scale: float = 1.0,
+        drag_scale: float = 1.0,
+    ) -> None:
+        if lift_scale < 0 or drag_scale < 0:
+            raise ValueError("lift_scale と drag_scale は0以上である必要があります")
+        self._base = base
+        self._lift_scale = lift_scale
+        self._drag_scale = drag_scale
+
+    def __call__(self, t: float, v_rel: np.ndarray) -> tuple[float, float]:
+        lift_area, drag_area = self._base(t, v_rel)
+        return lift_area * self._lift_scale, drag_area * self._drag_scale
